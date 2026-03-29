@@ -2,11 +2,15 @@
 
 一个极简静态页面：`/index.html`
 
-用途：根据 Yeap Vault 的份额模型，计算“当前可赎回 USDC/USDT”和“当前份额价值”，并可直接从 Aptos Fullnode 读取资源字段进行计算。
+用途：
+
+- 输入用户地址后，一键查询 YEAP USDT / YEAP USDC 两种包装代币的 `preview_redeem`（无需手动输入资源类型）
+- 根据 Yeap Vault 的份额模型，计算“当前可赎回 USDC/USDT”和“当前份额价值”
+- 可直接从 Aptos Fullnode 读取资源字段进行手动映射计算
 
 直接打开：
 
-- 本地双击 `index.html`（只用手动输入）
+- 本地双击 `index.html`
 - 或使用本地静态服务（推荐，可直接请求 Fullnode）：
 
 ```bash

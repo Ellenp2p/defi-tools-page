@@ -47,6 +47,18 @@
       .ok { color: #0b7a0b; }
       .err { color: #b00020; }
       ul { margin-top: 8px; }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 10px;
+      }
+      th, td {
+        border: 1px solid #ddd;
+        padding: 8px;
+        text-align: left;
+        font-size: 14px;
+      }
+      th { background: #fafafa; }
     </style>
   </head>
   <body>
@@ -67,7 +79,37 @@
     </div>
 
     <div class="card">
-      <h2>方式 A：手动输入（最稳定）</h2>
+      <h2>方式 A：一键查询 preview redeem（推荐）</h2>
+      <p class="muted">输入用户地址后，页面会自动查询 YEAP USDT / YEAP USDC 两种包装代币，并直接调用 <code>preview_redeem</code> 计算可领取数量。</p>
+      <div class="grid">
+        <div>
+          <label for="quickFullnodeUrl">Fullnode URL</label>
+          <input id="quickFullnodeUrl" value="https://fullnode.mainnet.aptoslabs.com/v1" />
+        </div>
+        <div>
+          <label for="quickUserAddress">用户地址</label>
+          <input id="quickUserAddress" placeholder="0x..." />
+        </div>
+      </div>
+      <button id="queryPreviewBtn">一键查询两种代币</button>
+      <p id="previewStatus" class="muted"></p>
+      <table>
+        <thead>
+          <tr>
+            <th>代币</th>
+            <th>metadata 地址</th>
+            <th>用户份额（raw）</th>
+            <th>preview redeem（raw）</th>
+          </tr>
+        </thead>
+        <tbody id="previewRows">
+          <tr><td colspan="4" class="muted">等待查询...</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h2>方式 B：手动输入（兼容模式）</h2>
       <div class="grid">
         <div>
           <label for="userSharesRaw">用户份额（raw，链上最小单位）</label>
@@ -105,7 +147,7 @@
     </div>
 
     <div class="card">
-      <h2>方式 B：从 Aptos Fullnode 读取（可选）</h2>
+      <h2>方式 C：从 Aptos Fullnode 读取（高级可选）</h2>
       <p class="muted">你只需要 Fullnode + 两个资源类型（用户仓位资源、Vault 资源），字段路径可自定义。</p>
       <div class="grid">
         <div>
@@ -165,9 +207,22 @@
     </div>
 
     <script>
+      const WRAPPED_TOKENS = [
+        { label: 'YEAP USDT 包装代币', metadata: '0x560adc958571709b69d4dfaef2dd994b9e77758beddbf20c5ac584bfec08fe0c' },
+        { label: 'YEAP USDC 包装代币', metadata: '0x6dc2b4cd0edc7aecd0aefad2864af87a2cc992a01f8fcf3ff1434ae93a7ecf39' },
+      ];
+      const PREVIEW_REDEEM_FUNCTION = '0x7b90b95e1060d9d2e424c6687ba03cccaed6996cccd4868b759c9fca361fa70::vault_lens::preview_redeem';
+      const BALANCE_FUNCTION = '0x1::primary_fungible_store::balance';
+
       function getPath(obj, path) {
         if (!path) return undefined;
         return path.split('.').reduce((acc, key) => (acc == null ? undefined : acc[key]), obj);
+      }
+
+      function normalizeAddress(input) {
+        const s = String(input || '').trim().toLowerCase();
+        if (!s) return '';
+        return s.startsWith('0x') ? s : `0x${s}`;
       }
 
       function parseBigIntField(v, fieldName) {
@@ -186,6 +241,83 @@
         let frac = fracPart.toString().padStart(decimals, '0').slice(0, fractionDigits);
         frac = frac.replace(/0+$/, '');
         return `${negative ? '-' : ''}${intPart.toString()}${frac ? '.' + frac : ''}`;
+      }
+
+      async function callView(fullnodeUrl, fn, args, typeArguments = []) {
+        const url = `${fullnodeUrl}/view`;
+        const resp = await fetch(url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            function: fn,
+            type_arguments: typeArguments,
+            arguments: args,
+          }),
+        });
+        if (!resp.ok) {
+          const detail = await resp.text();
+          throw new Error(`${fn} 调用失败: ${resp.status} ${detail.slice(0, 180)}`);
+        }
+        return resp.json();
+      }
+
+      function renderPreviewRows(rows) {
+        const tbody = document.getElementById('previewRows');
+        if (!rows.length) {
+          tbody.innerHTML = '<tr><td colspan="4" class="muted">没有可展示的数据</td></tr>';
+          return;
+        }
+        tbody.innerHTML = rows.map((row) => `
+          <tr>
+            <td>${row.label}</td>
+            <td><code>${row.metadata}</code></td>
+            <td>${row.balanceRaw}</td>
+            <td>${row.previewRedeemRaw}</td>
+          </tr>
+        `).join('');
+      }
+
+      async function queryPreviewRedeemByUser() {
+        const status = document.getElementById('previewStatus');
+        status.className = 'muted';
+        try {
+          const fullnodeUrl = document.getElementById('quickFullnodeUrl').value.replace(/\/$/, '');
+          const userAddress = normalizeAddress(document.getElementById('quickUserAddress').value);
+          if (!fullnodeUrl || !userAddress) throw new Error('请先填写 Fullnode URL 和用户地址');
+
+          const rows = [];
+          for (const token of WRAPPED_TOKENS) {
+            const metadataAddress = normalizeAddress(token.metadata);
+            const balanceResp = await callView(
+              fullnodeUrl,
+              BALANCE_FUNCTION,
+              [userAddress, metadataAddress],
+              ['0x1::fungible_asset::Metadata']
+            );
+            const balanceRaw = parseBigIntField(balanceResp[0], `${token.label} 用户份额`);
+
+            const redeemResp = await callView(
+              fullnodeUrl,
+              PREVIEW_REDEEM_FUNCTION,
+              [metadataAddress, balanceRaw.toString()]
+            );
+            const previewRedeemRaw = parseBigIntField(redeemResp[0], `${token.label} preview redeem`);
+
+            rows.push({
+              label: token.label,
+              metadata: metadataAddress,
+              balanceRaw: balanceRaw.toString(),
+              previewRedeemRaw: previewRedeemRaw.toString(),
+            });
+          }
+
+          renderPreviewRows(rows);
+          status.textContent = '查询成功：已自动查询两种包装代币并返回 preview redeem。';
+          status.className = 'muted ok';
+        } catch (err) {
+          status.textContent = `查询失败：${err.message}`;
+          status.className = 'muted err';
+        }
       }
 
       function computeAndRender() {
@@ -286,6 +418,7 @@
         }
       }
 
+      document.getElementById('queryPreviewBtn').addEventListener('click', queryPreviewRedeemByUser);
       document.getElementById('calcBtn').addEventListener('click', computeAndRender);
       document.getElementById('loadBtn').addEventListener('click', loadFromFullnode);
       computeAndRender();
