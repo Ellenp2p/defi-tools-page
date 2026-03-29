@@ -1,0 +1,22 @@
+[package]
+name = "helper-contart"
+version = "1.0.0"
+authors = []
+package = "0x3c08a387060ae713be456be4f3e6226773801b9c147bf94e28c67f30c9edc88d"
+
+[addresses]
+contract = "_"
+
+[dev-addresses]
+
+contract = "0x1324"
+
+[dependencies.AptosFramework]
+git = "https://github.com/aptos-labs/aptos-framework.git"
+rev = "mainnet"
+subdir = "aptos-framework"
+
+[dependencies.yeap-vault]
+local = "./yeap-contract/yeap-vault"
+
+[dev-dependencies]

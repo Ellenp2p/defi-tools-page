@@ -1,0 +1,16 @@
+[package]
+name = "yeap-vault"
+version = "1.0.0"
+authors = []
+
+[addresses]
+yeap_vault = "0x7b90b95e1060d9d2e424c6687ba03cccaed6996cccd4868b759c9fca361fa70"
+
+
+[dev-addresses]
+yeap_vault = "0x7b90b95e1060d9d2e424c6687ba03cccaed6996cccd4868b759c9fca361fa70"
+
+[dependencies.AptosFramework]
+git = "https://github.com/aptos-labs/aptos-framework.git"
+rev = "mainnet"
+subdir = "aptos-framework"

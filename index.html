@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Yeap 资金与可赎回金额计算器（Aptos Fullnode）</title>
+    <style>
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+        max-width: 900px;
+        margin: 24px auto;
+        padding: 0 16px;
+        line-height: 1.45;
+      }
+      h1, h2 { margin-bottom: 8px; }
+      .card {
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        padding: 14px;
+        margin-bottom: 16px;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+        gap: 12px;
+      }
+      label { display: block; font-size: 14px; margin-bottom: 4px; }
+      input {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 7px 8px;
+        border: 1px solid #bbb;
+        border-radius: 6px;
+        font-size: 14px;
+      }
+      button {
+        margin-top: 8px;
+        padding: 8px 12px;
+        border: 1px solid #888;
+        background: #f5f5f5;
+        border-radius: 6px;
+        cursor: pointer;
+      }
+      code { background: #f8f8f8; padding: 2px 4px; border-radius: 4px; }
+      .result { font-weight: 700; }
+      .muted { color: #666; font-size: 13px; }
+      .ok { color: #0b7a0b; }
+      .err { color: #b00020; }
+      ul { margin-top: 8px; }
+    </style>
+  </head>
+  <body>
+    <h1>Yeap 存款 / 可赎回金额计算器</h1>
+    <p>
+      目标：只依赖 <strong>Aptos Fullnode REST API</strong>，估算“我当前等价存了多少 USDC/USDT”和“现在能取出多少”。
+    </p>
+
+    <div class="card">
+      <h2>结论（先看这个）</h2>
+      <ol>
+        <li>核心是份额模型：<code>可赎回资产 = 用户份额 × 当前每份额资产价值</code>。</li>
+        <li>若你有池子总资产和总份额：<code>每份额价值 = 池子总资产 / 池子总份额</code>。</li>
+        <li>因此：<code>可赎回 = 用户份额 × 池子总资产 / 池子总份额</code>。</li>
+        <li>若已知你初始投入本金：<code>收益 = 可赎回 - 本金</code>。</li>
+      </ol>
+      <p class="muted">这与 Yeap 文档中的 Vault share 逻辑一致：份额数量通常不变，份额价值随收益变化。</p>
+    </div>
+
+    <div class="card">
+      <h2>方式 A：手动输入（最稳定）</h2>
+      <div class="grid">
+        <div>
+          <label for="userSharesRaw">用户份额（raw，链上最小单位）</label>
+          <input id="userSharesRaw" value="100000000" />
+        </div>
+        <div>
+          <label for="totalAssetsRaw">池子总资产（raw，USDC/USDT 最小单位）</label>
+          <input id="totalAssetsRaw" value="1050000000" />
+        </div>
+        <div>
+          <label for="totalSharesRaw">池子总份额（raw）</label>
+          <input id="totalSharesRaw" value="1000000000" />
+        </div>
+        <div>
+          <label for="principalRaw">你的本金（raw，可选）</label>
+          <input id="principalRaw" value="100000000" />
+        </div>
+        <div>
+          <label for="underlyingDecimals">USDC/USDT 精度（decimals）</label>
+          <input id="underlyingDecimals" value="6" />
+        </div>
+        <div>
+          <label for="shareDecimals">份额精度（decimals）</label>
+          <input id="shareDecimals" value="8" />
+        </div>
+      </div>
+      <button id="calcBtn">计算</button>
+      <ul>
+        <li class="result">当前可赎回（USDC/USDT）: <span id="redeemable">-</span></li>
+        <li class="result">当前等价存款价值（USDC/USDT）: <span id="currentValue">-</span></li>
+        <li class="result">当前收益（USDC/USDT）: <span id="pnl">-</span></li>
+        <li class="result">每 1 份额价值（USDC/USDT）: <span id="sharePrice">-</span></li>
+      </ul>
+      <p id="calcStatus" class="muted"></p>
+    </div>
+
+    <div class="card">
+      <h2>方式 B：从 Aptos Fullnode 读取（可选）</h2>
+      <p class="muted">你只需要 Fullnode + 两个资源类型（用户仓位资源、Vault 资源），字段路径可自定义。</p>
+      <div class="grid">
+        <div>
+          <label for="fullnodeUrl">Fullnode URL</label>
+          <input id="fullnodeUrl" value="https://fullnode.mainnet.aptoslabs.com/v1" />
+        </div>
+        <div>
+          <label for="userAccount">用户地址（owner）</label>
+          <input id="userAccount" placeholder="0x..." />
+        </div>
+        <div>
+          <label for="userResourceType">用户资源类型（Move struct）</label>
+          <input id="userResourceType" placeholder="0x...::module::UserPosition" />
+        </div>
+        <div>
+          <label for="vaultAccount">Vault 地址（通常是合约地址）</label>
+          <input id="vaultAccount" placeholder="0x..." />
+        </div>
+        <div>
+          <label for="vaultResourceType">Vault 资源类型（Move struct）</label>
+          <input id="vaultResourceType" placeholder="0x...::module::Vault" />
+        </div>
+        <div>
+          <label for="userSharesPath">用户份额字段路径（默认 data.shares）</label>
+          <input id="userSharesPath" value="data.shares" />
+        </div>
+        <div>
+          <label for="vaultCashPath">现金字段路径（默认 data.cash）</label>
+          <input id="vaultCashPath" value="data.cash" />
+        </div>
+        <div>
+          <label for="vaultBorrowsPath">借出字段路径（默认 data.total_borrows）</label>
+          <input id="vaultBorrowsPath" value="data.total_borrows" />
+        </div>
+        <div>
+          <label for="vaultBadDebtPath">坏账字段路径（可空，默认 data.bad_debt）</label>
+          <input id="vaultBadDebtPath" value="data.bad_debt" />
+        </div>
+        <div>
+          <label for="vaultTotalSharesPath">总份额字段路径（默认 data.total_shares）</label>
+          <input id="vaultTotalSharesPath" value="data.total_shares" />
+        </div>
+      </div>
+      <button id="loadBtn">读取并填充方式 A</button>
+      <p id="loadStatus" class="muted"></p>
+    </div>
+
+    <div class="card">
+      <h2>完整计划（你要做什么）</h2>
+      <ol>
+        <li>在 Yeap/Aptos 合约里确认：用户份额字段、Vault 总资产相关字段、Vault 总份额字段。</li>
+        <li>把字段路径填到“方式 B”，先读取数据，再自动填入“方式 A”。</li>
+        <li>点击“计算”，拿到可赎回金额、每份额价值、收益。</li>
+        <li>如果你要核对“当前 token 和实际 USDC/USDT 的关系”，就看“每 1 份额价值”。</li>
+      </ol>
+      <p class="muted">提示：USDC/USDT 在 Aptos 常见 decimals = 6；份额 token decimals 取决于协议实现。</p>
+    </div>
+
+    <script>
+      function getPath(obj, path) {
+        if (!path) return undefined;
+        return path.split('.').reduce((acc, key) => (acc == null ? undefined : acc[key]), obj);
+      }
+
+      function parseBigIntField(v, fieldName) {
+        if (v === undefined || v === null || v === '') throw new Error(`${fieldName} 为空`);
+        const s = String(v).trim();
+        if (!/^[-]?\d+$/.test(s)) throw new Error(`${fieldName} 不是整数: ${s}`);
+        return BigInt(s);
+      }
+
+      function formatUnits(raw, decimals, fractionDigits = 6) {
+        const base = BigInt(10) ** BigInt(decimals);
+        const negative = raw < 0n;
+        const abs = negative ? -raw : raw;
+        const intPart = abs / base;
+        const fracPart = abs % base;
+        let frac = fracPart.toString().padStart(decimals, '0').slice(0, fractionDigits);
+        frac = frac.replace(/0+$/, '');
+        return `${negative ? '-' : ''}${intPart.toString()}${frac ? '.' + frac : ''}`;
+      }
+
+      function computeAndRender() {
+        const status = document.getElementById('calcStatus');
+        status.className = 'muted';
+        try {
+          const userSharesRaw = parseBigIntField(document.getElementById('userSharesRaw').value, '用户份额');
+          const totalAssetsRaw = parseBigIntField(document.getElementById('totalAssetsRaw').value, '池子总资产');
+          const totalSharesRaw = parseBigIntField(document.getElementById('totalSharesRaw').value, '池子总份额');
+          const principalRawText = document.getElementById('principalRaw').value.trim();
+          const principalRaw = principalRawText ? parseBigIntField(principalRawText, '本金') : null;
+          const underlyingDecimals = Number(document.getElementById('underlyingDecimals').value);
+          const shareDecimals = Number(document.getElementById('shareDecimals').value);
+
+          if (!Number.isInteger(underlyingDecimals) || underlyingDecimals < 0 || underlyingDecimals > 30) {
+            throw new Error('USDC/USDT 精度无效');
+          }
+          if (!Number.isInteger(shareDecimals) || shareDecimals < 0 || shareDecimals > 30) {
+            throw new Error('份额精度无效');
+          }
+          if (totalSharesRaw <= 0n) throw new Error('池子总份额必须大于 0');
+
+          const redeemableRaw = (userSharesRaw * totalAssetsRaw) / totalSharesRaw;
+          const priceNumerator = totalAssetsRaw * (BigInt(10) ** BigInt(shareDecimals));
+          const priceDenominator = totalSharesRaw;
+          const oneSharePriceRawUnderlying = priceNumerator / priceDenominator;
+
+          document.getElementById('redeemable').textContent = formatUnits(redeemableRaw, underlyingDecimals);
+          document.getElementById('currentValue').textContent = formatUnits(redeemableRaw, underlyingDecimals);
+          document.getElementById('sharePrice').textContent = formatUnits(oneSharePriceRawUnderlying, underlyingDecimals);
+
+          if (principalRaw !== null) {
+            const pnlRaw = redeemableRaw - principalRaw;
+            document.getElementById('pnl').textContent = formatUnits(pnlRaw, underlyingDecimals);
+          } else {
+            document.getElementById('pnl').textContent = '（未填写本金）';
+          }
+
+          status.textContent = '计算完成：可赎回 = 用户份额 × 池子总资产 / 池子总份额';
+          status.className = 'muted ok';
+        } catch (err) {
+          status.textContent = `计算失败：${err.message}`;
+          status.className = 'muted err';
+        }
+      }
+
+      async function loadFromFullnode() {
+        const loadStatus = document.getElementById('loadStatus');
+        loadStatus.className = 'muted';
+        try {
+          const fullnodeUrl = document.getElementById('fullnodeUrl').value.replace(/\/$/, '');
+          const userAccount = document.getElementById('userAccount').value.trim();
+          const userResourceType = document.getElementById('userResourceType').value.trim();
+          const vaultAccount = document.getElementById('vaultAccount').value.trim();
+          const vaultResourceType = document.getElementById('vaultResourceType').value.trim();
+
+          if (!fullnodeUrl || !userAccount || !userResourceType || !vaultAccount || !vaultResourceType) {
+            throw new Error('请先填写 Fullnode URL、用户地址/资源、Vault 地址/资源');
+          }
+
+          const userResUrl = `${fullnodeUrl}/accounts/${userAccount}/resource/${encodeURIComponent(userResourceType)}`;
+          const vaultResUrl = `${fullnodeUrl}/accounts/${vaultAccount}/resource/${encodeURIComponent(vaultResourceType)}`;
+
+          const [userResp, vaultResp] = await Promise.all([fetch(userResUrl), fetch(vaultResUrl)]);
+          if (!userResp.ok) throw new Error(`读取用户资源失败: ${userResp.status}`);
+          if (!vaultResp.ok) throw new Error(`读取 Vault 资源失败: ${vaultResp.status}`);
+
+          const userJson = await userResp.json();
+          const vaultJson = await vaultResp.json();
+
+          const userSharesPath = document.getElementById('userSharesPath').value.trim();
+          const vaultCashPath = document.getElementById('vaultCashPath').value.trim();
+          const vaultBorrowsPath = document.getElementById('vaultBorrowsPath').value.trim();
+          const vaultBadDebtPath = document.getElementById('vaultBadDebtPath').value.trim();
+          const vaultTotalSharesPath = document.getElementById('vaultTotalSharesPath').value.trim();
+
+          const userShares = parseBigIntField(getPath(userJson, userSharesPath), '用户份额字段');
+          const cash = parseBigIntField(getPath(vaultJson, vaultCashPath), 'cash 字段');
+          const borrows = parseBigIntField(getPath(vaultJson, vaultBorrowsPath), 'total_borrows 字段');
+          const totalShares = parseBigIntField(getPath(vaultJson, vaultTotalSharesPath), 'total_shares 字段');
+          const badDebtValue = vaultBadDebtPath ? getPath(vaultJson, vaultBadDebtPath) : 0;
+          const badDebt = badDebtValue === undefined ? 0n : parseBigIntField(badDebtValue, 'bad_debt 字段');
+          const totalAssets = cash + borrows - badDebt;
+
+          if (totalAssets < 0n) throw new Error('计算出的 totalAssets 为负数，请检查字段映射');
+
+          document.getElementById('userSharesRaw').value = userShares.toString();
+          document.getElementById('totalAssetsRaw').value = totalAssets.toString();
+          document.getElementById('totalSharesRaw').value = totalShares.toString();
+
+          loadStatus.textContent = `读取成功：userShares=${userShares}，totalAssets=${totalAssets}，totalShares=${totalShares}`;
+          loadStatus.className = 'muted ok';
+
+          computeAndRender();
+        } catch (err) {
+          loadStatus.textContent = `读取失败：${err.message}`;
+          loadStatus.className = 'muted err';
+        }
+      }
+
+      document.getElementById('calcBtn').addEventListener('click', computeAndRender);
+      document.getElementById('loadBtn').addEventListener('click', loadFromFullnode);
+      computeAndRender();
+    </script>
+  </body>
+</html>
