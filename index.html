@@ -149,27 +149,56 @@
         return result[0];
       }
 
+      function setTablePlaceholder(tbody, message) {
+        tbody.textContent = '';
+        const tr = document.createElement('tr');
+        const td = document.createElement('td');
+        td.colSpan = 4;
+        td.className = 'muted';
+        td.textContent = message;
+        tr.appendChild(td);
+        tbody.appendChild(tr);
+      }
+
       function renderPreviewRows(rows) {
         const tbody = document.getElementById('previewRows');
+        tbody.textContent = '';
         if (!rows.length) {
-          tbody.innerHTML = '<tr><td colspan="4" class="muted">没有可展示的数据</td></tr>';
+          setTablePlaceholder(tbody, '没有可展示的数据');
           return;
         }
-        tbody.innerHTML = rows.map((row) => `
-          <tr>
-            <td>${row.label}</td>
-            <td><code>${row.metadata}</code></td>
-            <td>${row.balanceRaw}</td>
-            <td>${row.previewRedeemRaw}</td>
-          </tr>
-        `).join('');
+        rows.forEach((row) => {
+          const tr = document.createElement('tr');
+
+          const tdLabel = document.createElement('td');
+          tdLabel.textContent = row.label;
+          tr.appendChild(tdLabel);
+
+          const tdMetadata = document.createElement('td');
+          const code = document.createElement('code');
+          code.textContent = row.metadata;
+          tdMetadata.appendChild(code);
+          tr.appendChild(tdMetadata);
+
+          const tdBalance = document.createElement('td');
+          tdBalance.textContent = row.balanceRaw;
+          tr.appendChild(tdBalance);
+
+          const tdPreview = document.createElement('td');
+          tdPreview.textContent = row.previewRedeemRaw;
+          tr.appendChild(tdPreview);
+
+          tbody.appendChild(tr);
+        });
       }
 
       async function queryPreviewRedeemByUser() {
         const status = document.getElementById('previewStatus');
+        const tbody = document.getElementById('previewRows');
         status.className = 'muted';
+        setTablePlaceholder(tbody, '查询中...');
         try {
-          const fullnodeUrl = document.getElementById('quickFullnodeUrl').value.replace(/\/$/, '');
+          const fullnodeUrl = document.getElementById('quickFullnodeUrl').value.trim().replace(/\/$/, '');
           const userAddress = normalizeAddress(document.getElementById('quickUserAddress').value);
           if (!fullnodeUrl || !userAddress) throw new Error('请先填写 Fullnode URL 和用户地址');
 
@@ -186,6 +215,7 @@
               requireViewFirstValue(balanceResp, BALANCE_FUNCTION),
               `${token.label} 用户份额`
             );
+            if (balanceRaw < 0n) throw new Error(`${token.label} 用户份额为负数，数据异常`);
 
             const redeemResp = await callView(
               fullnodeUrl,
@@ -196,6 +226,7 @@
               requireViewFirstValue(redeemResp, PREVIEW_REDEEM_FUNCTION),
               `${token.label} preview_redeem`
             );
+            if (previewRedeemRaw < 0n) throw new Error(`${token.label} preview_redeem 为负数，数据异常`);
 
             rows.push({
               label: token.label,
@@ -209,6 +240,7 @@
           status.textContent = '查询成功';
           status.className = 'muted ok';
         } catch (err) {
+          setTablePlaceholder(tbody, '查询失败，请查看上方错误信息');
           status.textContent = `查询失败：${err.message}`;
           status.className = 'muted err';
         }
